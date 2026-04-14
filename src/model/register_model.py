@@ -2,8 +2,10 @@
 
 import json
 import mlflow
+import mlflow.sklearn
 import logging
 import os
+import pickle
 import dagshub
 
 # Set up DagsHub credentials for MLflow tracking
@@ -15,8 +17,8 @@ os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_token
 os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
 
 dagshub_url = "https://dagshub.com"
-repo_owner = "campusx-official"
-repo_name = "mlops-mini-project"
+repo_owner = "iamdebasishdas123"
+repo_name = "MLOPS_DEMO"
 
 # Set up MLflow tracking URI
 mlflow.set_tracking_uri(f'{dagshub_url}/{repo_owner}/{repo_name}.mlflow')
@@ -56,20 +58,32 @@ def load_model_info(file_path: str) -> dict:
 def register_model(model_name: str, model_info: dict):
     """Register the model to the MLflow Model Registry."""
     try:
-        model_uri = f"runs:/{model_info['run_id']}/{model_info['model_path']}"
-        
-        # Register the model
-        model_version = mlflow.register_model(model_uri, model_name)
-        
-        # Transition the model to "Staging" stage
         client = mlflow.tracking.MlflowClient()
-        client.transition_model_version_stage(
-            name=model_name,
-            version=model_version.version,
-            stage="Staging"
-        )
         
-        logger.debug(f'Model {model_name} version {model_version.version} registered and transitioned to Staging.')
+        # Load the model directly from the local pickle file
+        with open('models/model.pkl', 'rb') as f:
+            model = pickle.load(f)
+        logger.debug('Model loaded from models/model.pkl')
+        
+        # Start a new MLflow run to log and register the model
+        with mlflow.start_run():
+            # Log the model in this run
+            mlflow.sklearn.log_model(model, "model")
+            run_id = mlflow.active_run().info.run_id
+            logger.debug(f'Model logged to MLflow run {run_id}')
+            
+            # Register the model from this run
+            registered_model = mlflow.register_model(f"runs:/{run_id}/model", model_name)
+            logger.debug(f'Model {model_name} registered with version {registered_model.version}')
+            
+            # Transition the model to "Staging" stage
+            client.transition_model_version_stage(
+                name=model_name,
+                version=registered_model.version,
+                stage="Staging"
+            )
+            
+            logger.debug(f'Model {model_name} version {registered_model.version} transitioned to Staging.')
     except Exception as e:
         logger.error('Error during model registration: %s', e)
         raise
@@ -79,7 +93,7 @@ def main():
         model_info_path = 'reports/experiment_info.json'
         model_info = load_model_info(model_info_path)
         
-        model_name = "my_model"
+        model_name = "local_model"
         register_model(model_name, model_info)
     except Exception as e:
         logger.error('Failed to complete the model registration process: %s', e)
