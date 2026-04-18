@@ -12,7 +12,8 @@ jobs:
 
       - name: setup python
         uses: actions/setup-python@v2
-          python-version: '3.9'
+        with:
+          python-version: 3.9
 
       - name: install flake8
         run: |
@@ -21,4 +22,4 @@ jobs:
 
       - name: run flake8
         run: |
-          flake8 ci_demo/app.py
+          flake8 app.py
