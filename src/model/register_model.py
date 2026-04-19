@@ -6,10 +6,13 @@ import mlflow.sklearn
 import logging
 import os
 import pickle
-import dagshub
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set up DagsHub credentials for MLflow tracking
-dagshub_token = "159ec2545ad2e371c4774da563d6ef820e7c0ef9"
+dagshub_token = os.getenv("DAGSHUB_PAT")
 if not dagshub_token:
     raise EnvironmentError("DAGSHUB_PAT environment variable is not set")
 
@@ -41,6 +44,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
+
 def load_model_info(file_path: str) -> dict:
     """Load the model info from a JSON file."""
     try:
@@ -55,49 +59,98 @@ def load_model_info(file_path: str) -> dict:
         logger.error('Unexpected error occurred while loading the model info: %s', e)
         raise
 
+
+def get_valid_model_path(run_id: str, expected_path: str) -> str:
+    """
+    Verify the artifact path exists under the given run.
+    If not, list all artifacts and attempt to find a valid model path.
+    """
+    client = mlflow.tracking.MlflowClient()
+
+    def list_artifacts_recursive(run_id, path=""):
+        """Recursively list all artifacts under a run."""
+        artifacts = client.list_artifacts(run_id, path)
+        paths = []
+        for artifact in artifacts:
+            if artifact.is_dir:
+                paths.extend(list_artifacts_recursive(run_id, artifact.path))
+            else:
+                paths.append(artifact.path)
+        return paths
+
+    # Check if the expected path exists directly
+    artifacts_at_path = client.list_artifacts(run_id, expected_path)
+    if artifacts_at_path:
+        logger.debug("Artifact path '%s' found under run %s", expected_path, run_id)
+        return expected_path
+
+    # Expected path not found — list everything and search for MLmodel file
+    logger.warning(
+        "Artifact path '%s' not found under run %s. Scanning all artifacts...",
+        expected_path, run_id
+    )
+    all_artifacts = list_artifacts_recursive(run_id)
+    logger.debug("All artifacts found: %s", all_artifacts)
+
+    # MLflow models always contain an 'MLmodel' file — find its parent directory
+    mlmodel_files = [p for p in all_artifacts if p.endswith("MLmodel")]
+    if mlmodel_files:
+        # Use the parent directory of the first MLmodel file found
+        valid_path = mlmodel_files[0].replace("/MLmodel", "").replace("\\MLmodel", "")
+        logger.debug("Found valid model path via MLmodel file: '%s'", valid_path)
+        return valid_path
+
+    raise FileNotFoundError(
+        f"No valid model artifact found under run {run_id}. "
+        f"Available artifacts: {all_artifacts}"
+    )
+
+
 def register_model(model_name: str, model_info: dict):
     """Register the model to the MLflow Model Registry."""
-    try:
-        client = mlflow.tracking.MlflowClient()
-        
-        # Load the model directly from the local pickle file
-        with open('models/model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        logger.debug('Model loaded from models/model.pkl')
-        
-        # Start a new MLflow run to log and register the model
-        with mlflow.start_run():
-            # Log the model in this run
-            mlflow.sklearn.log_model(model, "model")
-            run_id = mlflow.active_run().info.run_id
-            logger.debug(f'Model logged to MLflow run {run_id}')
-            
-            # Register the model from this run
-            registered_model = mlflow.register_model(f"runs:/{run_id}/model", model_name)
-            logger.debug(f'Model {model_name} registered with version {registered_model.version}')
-            
-            # Transition the model to "Staging" stage
-            client.transition_model_version_stage(
-                name=model_name,
-                version=registered_model.version,
-                stage="Staging"
-            )
-            
-            logger.debug(f'Model {model_name} version {registered_model.version} transitioned to Staging.')
-    except Exception as e:
-        logger.error('Error during model registration: %s', e)
-        raise
+    client = mlflow.tracking.MlflowClient()
+
+    # Load the model from the local pickle file
+    with open('models/model.pkl', 'rb') as f:
+        model = pickle.load(f)
+    logger.debug('Model loaded from models/model.pkl')
+
+    # Set the correct experiment (avoid defaulting to experiment 0)
+    mlflow.set_experiment("my_experiment")  # 🔁 replace with your actual experiment name
+
+    # Log AND register inside the same run context
+    with mlflow.start_run(run_name="model_registration") as run:
+        model_info_mlflow = mlflow.sklearn.log_model(
+            sk_model=model,
+            artifact_path="model",        
+            registered_model_name=model_name  # ✅ register directly here
+        )
+        new_run_id = run.info.run_id
+        logger.debug('Model logged and registered in run %s', new_run_id)
+
+    # Transition to Staging
+    # Get the latest version just registered
+    versions = client.get_latest_versions(model_name, stages=["None"])
+    latest_version = versions[0].version
+
+    client.transition_model_version_stage(
+        name=model_name,
+        version=latest_version,
+        stage="Staging"
+    )
+    logger.debug(
+        'Model %s version %s transitioned to Staging.',
+        model_name, latest_version
+    )
+
 
 def main():
-    try:
-        model_info_path = 'reports/experiment_info.json'
-        model_info = load_model_info(model_info_path)
-        
-        model_name = "local_model"
-        register_model(model_name, model_info)
-    except Exception as e:
-        logger.error('Failed to complete the model registration process: %s', e)
-        print(f"Error: {e}")
+    model_info_path = 'reports/experiment_info.json'
+    model_info = load_model_info(model_info_path)
+
+    model_name = "model"
+    register_model(model_name, model_info)
+
 
 if __name__ == '__main__':
     main()

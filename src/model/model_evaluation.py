@@ -10,9 +10,13 @@ import mlflow
 import mlflow.sklearn
 import dagshub
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set up DagsHub credentials for MLflow tracking
-dagshub_token = "159ec2545ad2e371c4774da563d6ef820e7c0ef9"
+dagshub_token = os.getenv("DAGSHUB_PAT")
 if not dagshub_token:
     raise EnvironmentError("DAGSHUB_PAT environment variable is not set")
 
@@ -130,30 +134,47 @@ def main():
             
             save_metrics(metrics, 'reports/metrics.json')
             
-            # Log metrics to MLflow
-            for metric_name, metric_value in metrics.items():
-                mlflow.log_metric(metric_name, metric_value)
+            # Log metrics to MLflow with error handling
+            try:
+                for metric_name, metric_value in metrics.items():
+                    try:
+                        mlflow.log_metric(metric_name, metric_value)
+                    except Exception as metric_error:
+                        logger.warning('Could not log metric %s: %s', metric_name, metric_error)
+            except Exception as e:
+                logger.warning('Error logging metrics: %s', e)
             
             # Log model parameters to MLflow
             if hasattr(clf, 'get_params'):
                 params = clf.get_params()
                 for param_name, param_value in params.items():
-                    mlflow.log_param(param_name, param_value)
+                    try:
+                        # Only log serializable parameters
+                        mlflow.log_param(param_name, param_value)
+                    except Exception as param_error:
+                        logger.warning('Could not log parameter %s: %s', param_name, param_error)
+                        # Continue with other parameters
             
-            # Log model to MLflow
-            mlflow.sklearn.log_model(clf, "model")
-            
-            # Save model info
+            # Save model info (without logging model artifacts to avoid network timeout)
             save_model_info(run.info.run_id, "model", 'reports/experiment_info.json')
             
             # Log the metrics file to MLflow
-            mlflow.log_artifact('reports/metrics.json')
+            try:
+                mlflow.log_artifact('reports/metrics.json')
+            except Exception as e:
+                logger.warning('Could not log metrics artifact: %s', e)
 
             # Log the model info file to MLflow
-            mlflow.log_artifact('reports/experiment_info.json')
+            try:
+                mlflow.log_artifact('reports/experiment_info.json')
+            except Exception as e:
+                logger.warning('Could not log experiment info artifact: %s', e)
 
             # Log the evaluation errors log file to MLflow
-            mlflow.log_artifact('model_evaluation_errors.log')
+            try:
+                mlflow.log_artifact('model_evaluation_errors.log')
+            except Exception as e:
+                logger.warning('Could not log evaluation log artifact: %s', e)
         except Exception as e:
             logger.error('Failed to complete the model evaluation process: %s', e)
             print(f"Error: {e}")
