@@ -1,19 +1,21 @@
 # updated app.py
 
-from flask import Flask, render_template,request
+from flask import Flask, render_template, request
 import mlflow
 import pickle
-import os
-import pandas as pd
-
-import numpy as np
-import pandas as pd
 import os
 import re
 import nltk
 import string
+import logging
+import numpy as np
+import pandas as pd
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def lemmatization(text):
     """Lemmatize the text."""
@@ -87,17 +89,33 @@ app = Flask(__name__)
 
 # load model from model registry
 def get_latest_model_version(model_name):
-    client = mlflow.MlflowClient()
-    latest_version = client.get_latest_versions(model_name, stages=["Production"])
-    if not latest_version:
-        latest_version = client.get_latest_versions(model_name, stages=["None"])
-    return latest_version[0].version if latest_version else None
+    """Get the latest model version from the registry."""
+    try:
+        client = mlflow.MlflowClient()
+        # Use the newer API without deprecated stages parameter
+        versions = client.search_model_versions(f"name='{model_name}'")
+        if versions:
+            # Return the highest version number
+            latest_version = max([int(v.version) for v in versions])
+            return latest_version
+        else:
+            logger.warning(f"No versions found for model {model_name}")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting model version: {e}")
+        return None
 
-model_name = "my_model"
-model_version = get_latest_model_version(model_name)
-
-model_uri = f'models:/{model_name}/{model_version}'
-model = mlflow.pyfunc.load_model(model_uri)
+model_name = "model"  # Use the correct model name registered in register_model.py
+try:
+    model_version = get_latest_model_version(model_name)
+    if model_version is None:
+        raise ValueError(f"Could not find model '{model_name}' in registry")
+    
+    model_uri = f'models:/{model_name}/{model_version}'
+    model = mlflow.pyfunc.load_model(model_uri)
+except Exception as e:
+    logger.error(f"Error loading model from registry: {e}")
+    raise
 
 vectorizer = pickle.load(open('models/vectorizer.pkl','rb'))
 
