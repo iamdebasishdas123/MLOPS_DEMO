@@ -30,8 +30,12 @@ class TestModelLoading(unittest.TestCase):
         mlflow.set_tracking_uri(f'{dagshub_url}/{repo_owner}/{repo_name}.mlflow')
 
         # Load the new model from MLflow model registry
-        cls.new_model_name = " model"
+        cls.new_model_name = "model"
         cls.new_model_version = cls.get_latest_model_version(cls.new_model_name)
+        
+        if cls.new_model_version is None:
+            raise RuntimeError(f"No model version found for '{cls.new_model_name}' in Staging stage")
+        
         cls.new_model_uri = f'models:/{cls.new_model_name}/{cls.new_model_version}'
         cls.new_model = mlflow.pyfunc.load_model(cls.new_model_uri)
 
@@ -43,9 +47,26 @@ class TestModelLoading(unittest.TestCase):
 
     @staticmethod
     def get_latest_model_version(model_name, stage="Staging"):
+        """Get latest model version using the newer MLflow API."""
         client = mlflow.MlflowClient()
-        latest_version = client.get_latest_versions(model_name, stages=[stage])
-        return latest_version[0].version if latest_version else None
+        try:
+            # Try using the newer API with aliases first
+            registered_model = client.get_registered_model(model_name)
+            
+            # Check for models with the specified stage (older API)
+            for version in registered_model.latest_versions:
+                if version.current_stage == stage:
+                    return version.version
+            
+            # Fallback: use deprecated method for backward compatibility
+            try:
+                latest_version = client.get_latest_versions(model_name, stages=[stage])
+                return latest_version[0].version if latest_version else None
+            except Exception:
+                return None
+        except Exception as e:
+            print(f"Warning: Could not fetch model version: {e}")
+            return None
 
     def test_model_loaded_properly(self):
         self.assertIsNotNone(self.new_model)
