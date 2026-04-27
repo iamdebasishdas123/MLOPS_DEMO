@@ -7,3 +7,6 @@ numpy==1.26.4
 pandas==1.5.2
 python-dotenv==1.2.2
 gunicorn
+scikit-learn==1.5.1
+scipy==1.14.0
+cloudpickle==3.0.0
